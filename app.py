@@ -612,11 +612,16 @@ if __name__ == "__main__":
     server_port = int(os.environ.get("PORT", 7860))
     server_name = "0.0.0.0" if os.environ.get("PORT") else "127.0.0.1"
     
-    print(f"Starting server on {server_name}:{server_port} (share={share_flag})...")
-    demo.launch(
+    print(f"Starting server on {server_name}:{server_port} (share={share_flag})...", flush=True)
+    launch_res = demo.launch(
         server_name=server_name,
         server_port=server_port,
         share=share_flag,
         theme=gr.themes.Soft(),
         css=custom_css
     )
+    if isinstance(launch_res, tuple) and len(launch_res) >= 3:
+        _, local_url, share_url = launch_res[:3]
+        print(f"Local URL: {local_url}", flush=True)
+        if share_url:
+            print(f"PUBLIC_URL: {share_url}", flush=True)
