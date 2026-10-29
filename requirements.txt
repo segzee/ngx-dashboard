@@ -1,0 +1,8 @@
+gradio>=6.0.0
+pandas>=2.0.0
+tradingview_screener>=3.2.0
+openpyxl>=3.1.0
+pytz
+pygsheets>=2.0.6
+google-api-python-client
+google-auth
