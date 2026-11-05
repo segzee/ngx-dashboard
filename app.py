@@ -66,6 +66,13 @@ NIGERIA_TZ       = pytz.timezone("Africa/Lagos")
 GSHEET_CRED_PATH = r"C:\Users\Segun\Desktop\wqu-satellite-image-learning1-175e0a0906aa.json"
 GSHEET_URL       = "https://docs.google.com/spreadsheets/d/1jkbrrHnR48JztVz0SrqZELKjOenVm44wsiIchLW0K9g/edit#gid=1868316212"
 GSHEET_TAB_INDEX = 0
+INITIAL_GSHEET_COLUMNS = [
+    "name", "close", "basic_eps_net_income", "ebitda_fy", "Perf.5Y",
+    "last_annual_revenue", "price_book_ratio", "enterprise_value_current",
+    "average_volume_30d_calc", "enterprise_value_ebitda_ttm", "dividends_yield_current"
+]
+MODEL_PREDICTION_COLUMNS = {"Ensemble_Prob", "Signal"}
+MODEL_PREDICTION_PREFIXES = ("Prob_",)
 
 # Financial parameters from NGX_Black_Litterman_Real_World_v4.ipynb
 ANNUALIZATION     = 252
@@ -353,14 +360,24 @@ def push_to_gsheet(df, worksheet_idx=GSHEET_TAB_INDEX):
     if gc is None:
         return False, auth_msg
     try:
-        push_df = df.drop(columns=[c for c in ["ticker", "symbol"] if c in df.columns], errors="ignore")
+        # Keep the original NGX database column order and exclude ML prediction columns.
+        clean_df = df.drop(columns=[
+            col for col in df.columns
+            if col in MODEL_PREDICTION_COLUMNS or col.startswith(MODEL_PREDICTION_PREFIXES)
+        ], errors="ignore")
+        clean_df = clean_df.drop(columns=[c for c in ["ticker", "symbol"] if c in clean_df.columns], errors="ignore")
+
+        push_df = clean_df.reindex(columns=[c for c in INITIAL_GSHEET_COLUMNS if c in clean_df.columns]).copy()
+        if push_df.empty:
+            push_df = clean_df.copy()
+
         sh = gc.open_by_url(GSHEET_URL)
         wks = sh[worksheet_idx]
         wks.clear()
         wks.set_dataframe(push_df, (1, 1), copy_head=True, nan="")
         ts = now_wat_str()
         STATE["gsheet_synced"] = ts
-        return True, f"✅ Google Sheet '{wks.title}' updated successfully at {ts} ({len(push_df)} rows)"
+        return True, f"✅ Google Sheet '{wks.title}' updated with the original NGX database columns at {ts} ({len(push_df)} rows)"
     except Exception as exc:
         return False, f"❌ Google Sheet update error: {exc}"
 
@@ -1381,7 +1398,7 @@ body, .gradio-container {
 }
 """
 
-with gr.Blocks(title="AKH Capital Analytics Platform") as demo:
+with gr.Blocks(title="AKH Capital Analytics Platform", theme=gr.themes.Soft(), css=BASE_CSS) as demo:
 
     # Dynamic Theme CSS Injector
     theme_injector = gr.HTML(value=get_theme_css("🌙 Dark Obsidian"))
@@ -1744,7 +1761,5 @@ if __name__ == "__main__":
     demo.launch(
         server_name=server_name,
         server_port=server_port,
-        share=share_flag,
-        theme=gr.themes.Soft(),
-        css=BASE_CSS
+        share=share_flag
     )
