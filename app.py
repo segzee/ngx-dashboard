@@ -3,12 +3,17 @@
 AKH Capital Analytics Platform
 Modern Institutional NGX Intelligence & Quantitative Portfolio Suite
 ================================================================================
-Follows exact notebook code structures:
-  - NGX_Black_Litterman_Real_World_v4.ipynb (Full Black-Litterman, Manager Views P/Q,
-    SLSQP Constrained Optimization, Whole-Share Position Sizing & Risk Contribution)
-  - Ngx Undervalue stock and breakout.ipynb (EMA50 divergence, Outliers IQR, Candlestick Signals)
-  - Ngx_corr_stock_research.ipynb (Equities Return Correlation Heatmap & Diversification)
-  - prophet_forecast1.ipynb (Multi-Horizon Price Projection with Confidence Intervals)
+Features:
+  - 🎨 Dual Theme Mode: Dark Obsidian (Night) & Light Pearl (Day) with Vivid Colors
+  - 🏛️ Market Research & Live Screener (TradingView Screener API + Google Sheets Sync)
+  - 💼 Black-Litterman Portfolio Engine (Manager Convictions P/Q, SLSQP & Whole-Share Sizing)
+  - 📊 Return Correlation Matrix & Diversification Explorer
+  - 📈 Multi-Horizon Price Forecasting with 90% Confidence Uncertainty Bands
+  - 🤖 Machine Learning Intelligence:
+      1. Pre-Trained 4-Model Ensemble (RandomForest, XGBoost, LightGBM, LogisticRegression)
+         from `Notebooks/Machine learning/ngx model_eval_ensemble_updated (2).ipynb`
+      2. K-Means Behavioral Clustering + 2D PCA Projection
+      3. Multi-Factor Quantitative Ranking Model
 ================================================================================
 """
 
@@ -30,6 +35,22 @@ from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from tradingview_screener import Query
 
+# Monkeypatch scikit-learn compatibility for unpickling ColumnTransformer & SimpleImputer bundles
+import sklearn.compose._column_transformer as sct
+class _RemainderColsList(list):
+    pass
+sct._RemainderColsList = _RemainderColsList
+
+from sklearn.impute import SimpleImputer
+_orig_imputer_transform = SimpleImputer.transform
+def _patched_imputer_transform(self, X):
+    if not hasattr(self, "_fill_dtype"):
+        self._fill_dtype = getattr(self, "statistics_", np.array([0.0])).dtype
+    return _orig_imputer_transform(self, X)
+SimpleImputer.transform = _patched_imputer_transform
+
+import joblib
+
 warnings.filterwarnings("ignore")
 
 try:
@@ -39,32 +60,28 @@ except ImportError:
     PYGSHEETS_AVAILABLE = False
 
 # ==============================================================================
-# 1. GLOBAL CONFIGURATION & MARKET DEFAULTS (FROM NOTEBOOKS)
+# 1. GLOBAL CONFIGURATION & MARKET DEFAULTS
 # ==============================================================================
 NIGERIA_TZ       = pytz.timezone("Africa/Lagos")
 GSHEET_CRED_PATH = r"C:\Users\Segun\Desktop\wqu-satellite-image-learning1-175e0a0906aa.json"
 GSHEET_URL       = "https://docs.google.com/spreadsheets/d/1jkbrrHnR48JztVz0SrqZELKjOenVm44wsiIchLW0K9g/edit#gid=1868316212"
 GSHEET_TAB_INDEX = 0
 
-# Core parameters from NGX_Black_Litterman_Real_World_v4.ipynb
+# Financial parameters from NGX_Black_Litterman_Real_World_v4.ipynb
 ANNUALIZATION     = 252
 RIDGE             = 1e-8
-TAU               = None              # Calibrated as 1 / estimation sample length
 DELTA_FLOOR       = 0.25
 DELTA_CAP         = 10.0
-MOMENTUM_FAST     = 63
-MOMENTUM_SLOW     = 126
-VIEW_SHRINKAGE    = 0.50
 VIEW_MAX_EXCESS   = 0.20
 MIN_CONFIDENCE    = 0.25
 MAX_CONFIDENCE    = 0.85
-MAX_WEIGHT        = 0.25              # 25% single position ceiling
-MAX_ACTIVE_WEIGHT = 0.15              # +/- 15% active deviation from market cap
-MAX_PORTFOLIO_VOL = 0.30              # Max portfolio volatility constraint
+MAX_WEIGHT        = 0.25
+MAX_ACTIVE_WEIGHT = 0.15
+MAX_PORTFOLIO_VOL = 0.30
 TURNOVER_PENALTY  = 0.01
-RF_FALLBACK       = 0.185             # Nigeria MPR / Treasury benchmark (18.5% p.a.)
+RF_FALLBACK       = 0.185     # Nigeria MPR benchmark (18.5% p.a.)
 
-# Default Manager Convictions directly from the notebook
+# Default Manager Opinions from Cell 36 of BL notebook
 DEFAULT_NOTEBOOK_MANAGER_VIEWS = [
     {
         "type": "absolute",
@@ -98,27 +115,26 @@ DEFAULT_NOTEBOOK_MANAGER_VIEWS = [
     },
 ]
 
-# Excluded industries list from Ngx Undervalue stock and breakout.ipynb
-EXCLUDED_INDUSTRIES = [
-    'Regional Banks', 'Investment Banks/Brokers', 'Beverages: Alcoholic',
-    'Investment Managers', 'Multi-Line Insurance', 'Real Estate Development',
-    'Insurance Brokers/Services', 'Major Banks', 'Hotels/Resorts/Cruise lines',
-    'Finance/Rental/Leasing', 'Life/Health Insurance', 'Aerospace & Defense',
-    'Investment Trusts/Mutual Funds'
-]
+# Model directory for 5-day ensemble classifiers
+ML_MODEL_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "Model mangement", "Classification model", "5 days prediction model", "NGX v1"
+)
 
-# In-memory Application State
+# Application In-Memory State
 STATE = {
     "df":            None,
     "last_updated":  None,
     "gsheet_synced": None,
-    "status":        "🟢 Platform initialized and ready",
+    "status":        "🟢 Platform ready. Click 'Refresh Market Data' to load live prices.",
     "export_path":   os.path.abspath("NGX_Stocks_Data.xlsx"),
-    "manager_views": list(DEFAULT_NOTEBOOK_MANAGER_VIEWS)
+    "manager_views": list(DEFAULT_NOTEBOOK_MANAGER_VIEWS),
+    "theme":         "Dark Obsidian",
+    "ml_bundle":     None
 }
 
 # ==============================================================================
-# 2. MATHEMATICAL & ALGORITHMIC FOUNDATION (EXACT NOTEBOOK FUNCTIONS)
+# 2. UTILITY & MATHEMATICAL FUNCTIONS (FROM NOTEBOOKS)
 # ==============================================================================
 def now_wat_str():
     return datetime.datetime.now(NIGERIA_TZ).strftime("%d %b %Y • %I:%M:%S %p WAT")
@@ -158,27 +174,6 @@ def risk_contribution(weights, sigma):
     pv = np.sqrt(max(w @ S @ w, RIDGE))
     contribution = w * (S @ w) / pv
     return pd.Series(contribution / max(pv, RIDGE), index=weights.index if hasattr(weights, "index") else range(len(w)))
-
-def remove_outliers_iqr(df, column, factor=1.5):
-    """IQR outlier removal from Ngx Undervalue stock and breakout.ipynb (Cell 8)."""
-    if column not in df.columns:
-        return df
-    clean_series = df[column].dropna()
-    if len(clean_series) < 4:
-        return df
-    Q1 = clean_series.quantile(0.25)
-    Q3 = clean_series.quantile(0.75)
-    IQR = Q3 - Q1
-    lower_bound = Q1 - factor * IQR
-    upper_bound = Q3 + factor * IQR
-    return df[(df[column] >= lower_bound) & (df[column] <= upper_bound)]
-
-def zscore_cross_section(series):
-    """Cross-sectional z-score (Cell 16 of BL notebook)."""
-    std = series.std(ddof=0)
-    if std < 1e-12:
-        return pd.Series(0.0, index=series.index)
-    return (series - series.mean()) / std
 
 def build_manager_view_matrix(manager_views, tickers):
     """
@@ -274,10 +269,7 @@ def black_litterman(pi, sigma, tau, q, confidence,
     )
 
 def optimise_portfolio(mu, sigma, benchmark_w, previous_w=None, risk_aversion=None):
-    """
-    Constrained quadratic utility optimization.
-    Direct implementation of Cell 20 in NGX_Black_Litterman_Real_World_v4.ipynb.
-    """
+    """Constrained SLSQP quadratic programming (Cell 20 of BL notebook)."""
     assets = mu.index
     n = len(assets)
     mu_v = mu.values
@@ -320,7 +312,6 @@ def optimise_portfolio(mu, sigma, benchmark_w, previous_w=None, risk_aversion=No
     if result.success:
         return pd.Series(result.x, index=assets, name="weight"), "Optimal SLSQP Convergence"
 
-    # Fallback to minimum-variance fully invested
     fallback = minimize(
         lambda w: portfolio_vol(w, sigma_m),
         x0=np.repeat(1.0 / n, n),
@@ -332,10 +323,10 @@ def optimise_portfolio(mu, sigma, benchmark_w, previous_w=None, risk_aversion=No
     if fallback.success:
         return pd.Series(fallback.x, index=assets, name="weight"), "Fallback Minimum-Variance Solution"
 
-    return pd.Series(x0, index=assets, name="weight"), f"Heuristic Allocation: {result.message}"
+    return pd.Series(x0, index=assets, name="weight"), f"Heuristic: {result.message}"
 
 # ==============================================================================
-# 3. GOOGLE SHEETS CONNECTOR (PYGSHEETS INTEGRATION)
+# 3. GOOGLE SHEETS & LIVE MARKET DATA ENGINE
 # ==============================================================================
 def get_gsheet_client():
     if not PYGSHEETS_AVAILABLE:
@@ -373,11 +364,8 @@ def push_to_gsheet(df, worksheet_idx=GSHEET_TAB_INDEX):
     except Exception as exc:
         return False, f"❌ Google Sheet update error: {exc}"
 
-# ==============================================================================
-# 4. LIVE DATA ENGINE: TRADINGVIEW SCREENER
-# ==============================================================================
 def fetch_ngx_market():
-    """Fetch live stock data from Nigerian Exchange via TradingView Screener."""
+    """Fetch real-time NGX equities and technicals via TradingView Screener."""
     try:
         q = (
             Query()
@@ -387,7 +375,7 @@ def fetch_ngx_market():
                 "last_annual_revenue", "price_book_ratio", "price_earnings_ttm",
                 "enterprise_value_current", "market_cap_basic",
                 "average_volume_30d_calc", "enterprise_value_ebitda_ttm",
-                "dividends_yield_current", "EMA50", "VWAP", "RSI"
+                "dividends_yield_current", "EMA50", "VWAP", "RSI", "sector", "industry"
             )
             .limit(200)
             .set_markets("nigeria")
@@ -397,7 +385,7 @@ def fetch_ngx_market():
         df = data[1] if isinstance(data, tuple) and len(data) == 2 else pd.DataFrame()
 
         if df.empty:
-            return STATE["df"], "⚠️ TradingView query returned empty dataset."
+            return STATE["df"], "⚠️ TradingView query returned an empty dataset."
 
         if "ticker" in df.columns:
             df["symbol"] = df["ticker"].astype(str).str.replace("NSENG:", "", regex=False)
@@ -416,7 +404,6 @@ def fetch_ngx_market():
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
 
-        # EMA50 percentage difference calculation from notebook
         if "EMA50" in df.columns and "close" in df.columns:
             df["EMA50_pct_diff"] = ((df["EMA50"] - df["close"]) / df["close"].replace(0, np.nan)) * 100
         else:
@@ -444,8 +431,213 @@ def fetch_ngx_market():
         return pd.DataFrame(), err
 
 # ==============================================================================
-# 5. UI PIPELINE FUNCTIONS
+# 4. PRE-TRAINED ENSEMBLE CLASSIFIER ENGINE (FROM NOTEBOOK)
 # ==============================================================================
+def load_ml_ensemble_bundle():
+    """Load the 4 ensemble models from Model mangement/Classification model/5 days prediction model/NGX v1."""
+    if STATE.get("ml_bundle") is not None:
+        return STATE["ml_bundle"]
+
+    models_dict = {}
+    model_paths = {
+        "RandomForest":       os.path.join(ML_MODEL_DIR, "ngxRandomForest_ensemble_v1.pkl"),
+        "XGBoost":            os.path.join(ML_MODEL_DIR, "ngxXGBoost_ensemble_v1.pkl"),
+        "LightGBM":           os.path.join(ML_MODEL_DIR, "ngxLightGBM_ensemble_v1.pkl"),
+        "LogisticRegression": os.path.join(ML_MODEL_DIR, "ngxLogisticRegression_ensemble_v1.pkl"),
+    }
+
+    all_features = None
+    for name, p in model_paths.items():
+        if os.path.exists(p):
+            try:
+                bundle = joblib.load(p)
+                models_dict[name] = bundle["model"]
+                if all_features is None and "all_features" in bundle:
+                    all_features = bundle["all_features"]
+            except Exception as e:
+                print(f"Warning: could not load {name}: {e}")
+
+    bundle_res = {
+        "models": models_dict,
+        "all_features": all_features or []
+    }
+    STATE["ml_bundle"] = bundle_res
+    return bundle_res
+
+def run_ml_ensemble_predictions(decision_threshold=0.50, top_n=15):
+    """
+    Executes the exact ensemble prediction pipeline from:
+    Notebooks/Machine learning/ngx model_eval_ensemble_updated (2).ipynb
+    """
+    df = STATE["df"]
+    if df is None or df.empty:
+        return go.Figure(), pd.DataFrame(), "⚠️ Please click 'Refresh Market Data' first."
+
+    bundle = load_ml_ensemble_bundle()
+    models = bundle["models"]
+    all_features = bundle["all_features"]
+
+    if not models or not all_features:
+        return go.Figure(), pd.DataFrame(), f"⚠️ Ensemble models not found in `{ML_MODEL_DIR}`."
+
+    # Build feature frame matching all_features
+    sample_df = df.copy()
+    X_input = pd.DataFrame(index=sample_df.index)
+
+    # Match numeric and categorical dummy columns
+    for feat in all_features:
+        if feat in sample_df.columns:
+            X_input[feat] = pd.to_numeric(sample_df[feat], errors="coerce").fillna(0.0)
+        elif feat.startswith("sector_") and "sector" in sample_df.columns:
+            sec_name = feat.replace("sector_", "")
+            X_input[feat] = (sample_df["sector"] == sec_name).astype(int)
+        elif feat.startswith("industry_") and "industry" in sample_df.columns:
+            ind_name = feat.replace("industry_", "")
+            X_input[feat] = (sample_df["industry"] == ind_name).astype(int)
+        elif feat.startswith("pattern_"):
+            # Map pattern triggers from notebook if present or default 0
+            pat_name = feat.replace("pattern_", "")
+            if pat_name in sample_df.columns:
+                X_input[feat] = (sample_df[pat_name] > 0).astype(int)
+            else:
+                X_input[feat] = 0
+        else:
+            X_input[feat] = 0.0
+
+    X_input = X_input.reindex(columns=all_features, fill_value=0.0)
+
+    # Individual model predictions
+    preds_dict = {}
+    for name, model in models.items():
+        try:
+            preds_dict[name] = model.predict_proba(X_input)[:, 1]
+            sample_df[f"Prob_{name}"] = (preds_dict[name] * 100).round(1)
+        except Exception as e:
+            print(f"Prediction failed for {name}: {e}")
+
+    # Ensemble Average (Cell 8 of notebook)
+    if preds_dict:
+        avg_prob = np.mean(list(preds_dict.values()), axis=0)
+        sample_df["Ensemble_Prob"] = (avg_prob * 100).round(1)
+        sample_df["Signal"] = np.where(avg_prob >= decision_threshold, "⭐ Breakout Surge", "Normal Drift")
+    else:
+        sample_df["Ensemble_Prob"] = 50.0
+        sample_df["Signal"] = "Normal Drift"
+
+    # Sort by highest ensemble conviction
+    ranked = sample_df.sort_values(by="Ensemble_Prob", ascending=False).head(int(top_n)).reset_index(drop=True)
+
+    # Visualization: Model Voting Comparison
+    fig = go.Figure()
+    palette = {"RandomForest": "#10b981", "XGBoost": "#38bdf8", "LightGBM": "#f59e0b", "LogisticRegression": "#a855f7"}
+
+    for name in models.keys():
+        col_name = f"Prob_{name}"
+        if col_name in ranked.columns:
+            fig.add_trace(go.Bar(
+                name=name,
+                x=ranked["name"],
+                y=ranked[col_name],
+                marker_color=palette.get(name, "#64748b")
+            ))
+
+    # Add ensemble line
+    fig.add_trace(go.Scatter(
+        name="⭐ Ensemble Mean",
+        x=ranked["name"],
+        y=ranked["Ensemble_Prob"],
+        mode="lines+markers",
+        line=dict(color="#f43f5e", width=3, dash="solid"),
+        marker=dict(size=9, symbol="star")
+    ))
+
+    is_dark = STATE.get("theme", "Dark Obsidian") == "Dark Obsidian"
+    fig.update_layout(
+        title=f"🤖 Ensemble 5-Day Breakout Conviction (Top {top_n} Equities)",
+        xaxis_tickangle=-45, yaxis_title="Breakout Probability (%)",
+        yaxis_range=[0, 105],
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        font_color="#cbd5e1" if is_dark else "#1e293b",
+        height=440, barmode="group",
+        margin=dict(l=30, r=20, t=50, b=80),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+
+    display_cols = ["name", "close", "Ensemble_Prob", "Signal"] + [f"Prob_{m}" for m in models.keys()]
+    avail_cols = [c for c in display_cols if c in ranked.columns]
+    res_table = ranked[avail_cols].rename(columns={
+        "name": "Ticker", "close": "Price (₦)",
+        "Ensemble_Prob": "Ensemble Prob (%)"
+    })
+
+    top_stock = ranked.iloc[0]["name"] if not ranked.empty else "N/A"
+    top_score = ranked.iloc[0]["Ensemble_Prob"] if not ranked.empty else 0.0
+
+    summary_md = f"""
+### 🤖 4-Model Ensemble Classification Summary
+- **Model Stack:** RandomForest + XGBoost + LightGBM + LogisticRegression (from `Notebooks/Machine learning/ngx model_eval_ensemble_updated (2).ipynb`).
+- **Highest Conviction Setup:** **{top_stock}** ({top_score}% breakout probability).
+- **Decision Boundary:** Probability threshold **{decision_threshold * 100:.0f}%**.
+- **Active Ensembles Loaded:** {len(models)} machine learning estimators.
+    """
+
+    return fig, res_table, summary_md
+
+# ==============================================================================
+# 5. UI PIPELINE & THEME SYSTEM
+# ==============================================================================
+def get_theme_css(theme_name):
+    """Generate dynamic CSS palette for Dark Obsidian vs Light Pearl."""
+    if theme_name == "🌙 Dark Obsidian":
+        return """
+        <style id="custom-theme-style">
+        body, .gradio-container {
+            background: radial-gradient(circle at top right, #0f172a 0%, #080c14 60%, #030712 100%) !important;
+            color: #f1f5f9 !important;
+        }
+        .brand-navbar {
+            background: linear-gradient(135deg, rgba(15, 23, 42, 0.85) 0%, rgba(30, 41, 59, 0.85) 100%) !important;
+            border: 1px solid rgba(255, 255, 255, 0.1) !important;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5) !important;
+        }
+        .glass-panel, .gradio-dataframe {
+            background: rgba(15, 23, 42, 0.75) !important;
+            border: 1px solid rgba(255, 255, 255, 0.08) !important;
+            color: #f8fafc !important;
+        }
+        .tab-nav button { color: #94a3b8 !important; }
+        .tab-nav button.selected { color: #38bdf8 !important; border-bottom: 3px solid #38bdf8 !important; }
+        </style>
+        """
+    else: # ☀️ Light Pearl
+        return """
+        <style id="custom-theme-style">
+        body, .gradio-container {
+            background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 50%, #e2e8f0 100%) !important;
+            color: #0f172a !important;
+        }
+        .brand-navbar {
+            background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%) !important;
+            border: 1px solid rgba(0, 0, 0, 0.1) !important;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.05) !important;
+        }
+        .brand-navbar h1 {
+            background: linear-gradient(90deg, #0f172a 0%, #0284c7 100%) !important;
+            -webkit-background-clip: text !important;
+            -webkit-text-fill-color: transparent !important;
+        }
+        .glass-panel, .gradio-dataframe {
+            background: #ffffff !important;
+            border: 1px solid rgba(0, 0, 0, 0.1) !important;
+            color: #0f172a !important;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04) !important;
+        }
+        .tab-nav button { color: #475569 !important; }
+        .tab-nav button.selected { color: #0284c7 !important; border-bottom: 3px solid #0284c7 !important; }
+        </style>
+        """
+
 def compute_kpis(df):
     if df is None or df.empty:
         return "0 Equities", "N/A", "N/A", "N/A"
@@ -485,7 +677,6 @@ def filter_screener_table(search_query, sort_by, min_yield, breakout_filter, df=
     if min_yield and min_yield > 0 and "dividends_yield_current" in out.columns:
         out = out[out["dividends_yield_current"] >= min_yield]
 
-    # Breakout & Value Filter (from notebook)
     if breakout_filter == "EMA50 Breakout Setup":
         if "EMA50_pct_diff" in out.columns:
             out = out[(out["EMA50_pct_diff"] >= 2.5) & (out["EMA50_pct_diff"] <= 200)]
@@ -529,25 +720,21 @@ def filter_screener_table(search_query, sort_by, min_yield, breakout_filter, df=
         if c in res.columns:
             res[c] = res[c].round(2)
 
-    rename_map = {
-        "name": "Company",
-        "close": "Price (₦)",
-        "dividends_yield_current": "Div Yield (%)",
-        "Perf.5Y": "5Y Return (%)",
-        "Perf.Y": "1Y Return (%)",
-        "price_book_ratio": "P/B Ratio",
-        "price_earnings_ttm": "P/E Ratio",
-        "market_cap_basic": "Market Cap (₦)",
-        "EMA50": "EMA50 (₦)",
-        "EMA50_pct_diff": "EMA50 Diff (%)",
-        "RSI": "RSI (14)",
-        "average_volume_30d_calc": "Avg 30D Vol"
-    }
-    return res.rename(columns=rename_map)
+    return res.rename(columns={
+        "name": "Company", "close": "Price (₦)",
+        "dividends_yield_current": "Div Yield (%)", "Perf.5Y": "5Y Return (%)",
+        "Perf.Y": "1Y Return (%)", "price_book_ratio": "P/B Ratio",
+        "price_earnings_ttm": "P/E Ratio", "market_cap_basic": "Market Cap (₦)",
+        "EMA50": "EMA50 (₦)", "EMA50_pct_diff": "EMA50 Diff (%)",
+        "RSI": "RSI (14)", "average_volume_30d_calc": "Avg 30D Vol"
+    })
 
 def build_market_charts(df):
     if df is None or df.empty:
         return go.Figure(), go.Figure(), go.Figure()
+
+    is_dark = STATE.get("theme", "Dark Obsidian") == "Dark Obsidian"
+    font_col = "#cbd5e1" if is_dark else "#1e293b"
 
     # Top 5Y Performers
     if "Perf.5Y" in df.columns:
@@ -562,7 +749,7 @@ def build_market_charts(df):
             title="🚀 Top 10 Equities — 5-Year Capital Gain (%)",
             xaxis_tickangle=-45, yaxis_title="5Y Return (%)",
             plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-            font_color="#cbd5e1", height=380, margin=dict(l=30, r=20, t=50, b=70)
+            font_color=font_col, height=380, margin=dict(l=30, r=20, t=50, b=70)
         )
     else:
         fig_5y = go.Figure()
@@ -580,7 +767,7 @@ def build_market_charts(df):
             title="💰 Top 10 Equities — Dividend Yield (%)",
             xaxis_tickangle=-45, yaxis_title="Yield (%)",
             plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-            font_color="#cbd5e1", height=380, margin=dict(l=30, r=20, t=50, b=70)
+            font_color=font_col, height=380, margin=dict(l=30, r=20, t=50, b=70)
         )
     else:
         fig_div = go.Figure()
@@ -599,7 +786,7 @@ def build_market_charts(df):
             title="🏛️ Top 10 Equities — Market Capitalization (₦ Trillions)",
             xaxis_tickangle=-45, yaxis_title="₦ Trillions",
             plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-            font_color="#cbd5e1", height=380, margin=dict(l=30, r=20, t=50, b=70)
+            font_color=font_col, height=380, margin=dict(l=30, r=20, t=50, b=70)
         )
     else:
         fig_cap = go.Figure()
@@ -607,22 +794,13 @@ def build_market_charts(df):
     return fig_5y, fig_div, fig_cap
 
 # ==============================================================================
-# 6. BLACK-LITTERMAN WITH MANAGER VIEWS & POSITION SIZING (FULL NOTEBOOK CODE)
+# 6. BLACK-LITTERMAN PORTFOLIO EXECUTION WITH MANAGER VIEWS
 # ==============================================================================
 def run_full_black_litterman(
-    selected_tickers,
-    capital_ngn,
-    risk_tolerance,
-    include_notebook_views,
-    custom_view_ticker,
-    custom_view_type,
-    custom_view_return_pct,
-    custom_view_confidence_pct
+    selected_tickers, capital_ngn, risk_tolerance,
+    include_notebook_views, custom_view_ticker, custom_view_type,
+    custom_view_return_pct, custom_view_confidence_pct
 ):
-    """
-    Executes the exact Black-Litterman workflow with Manager Opinions
-    from NGX_Black_Litterman_Real_World_v4.ipynb.
-    """
     df = STATE["df"]
     if df is None or df.empty:
         return go.Figure(), go.Figure(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), "⚠️ Please click 'Refresh Market Data' first."
@@ -634,14 +812,9 @@ def run_full_black_litterman(
     tickers = sub["name"].tolist()
     n = len(tickers)
 
-    # Market equilibrium weights (w_market)
     caps = sub["market_cap_basic"].fillna(sub["market_cap_basic"].median()).values
-    if caps.sum() <= 0:
-        w_market = pd.Series(np.ones(n) / n, index=tickers)
-    else:
-        w_market = pd.Series(caps / caps.sum(), index=tickers)
+    w_market = pd.Series(caps / caps.sum(), index=tickers) if caps.sum() > 0 else pd.Series(np.ones(n) / n, index=tickers)
 
-    # 5Y annualized returns (CAGR) and covariance matrix
     perf_5y = sub["Perf.5Y"].fillna(0.0).values / 100.0
     cagr = np.array([max(0.01, 1.0 + p) ** (1.0 / 5.0) - 1.0 for p in perf_5y])
     cagr_series = pd.Series(cagr, index=tickers)
@@ -654,24 +827,17 @@ def run_full_black_litterman(
     cov = np.outer(vols, vols) * rho
     np.fill_diagonal(cov, vols ** 2)
     cov_matrix = make_psd(cov)
-    cov_df = pd.DataFrame(cov_matrix, index=tickers, columns=tickers)
 
-    # Calibrate risk aversion delta
     delta = float(np.clip(2.5 + (10 - risk_tolerance) * 0.45, DELTA_FLOOR, DELTA_CAP))
-
-    # Implied equilibrium excess returns: Pi = delta * Sigma * w_market
     pi_excess = pd.Series(delta * (cov_matrix @ w_market.values), index=tickers, name="pi_excess")
 
-    # Quantitative views from notebook (Cell 16)
     tau = 1.0 / n
     q_quant = (pi_excess + cagr_series * 0.4).clip(-VIEW_MAX_EXCESS, VIEW_MAX_EXCESS)
     conf_quant = np.clip(0.40 + (vol_series.max() - vol_series) * 0.5, MIN_CONFIDENCE, MAX_CONFIDENCE)
 
-    # Assemble Manager Views (Cell 36 of notebook)
     active_manager_views = []
     if include_notebook_views:
         for mv in DEFAULT_NOTEBOOK_MANAGER_VIEWS:
-            # Only include if tickers are within the user's selected universe
             if mv.get("type") == "absolute" and mv.get("ticker") in tickers:
                 active_manager_views.append(mv)
             elif mv.get("type") == "relative":
@@ -680,43 +846,37 @@ def run_full_black_litterman(
                 if has_long and has_short:
                     active_manager_views.append(mv)
 
-    # Add custom user manager view if supplied
     if custom_view_ticker and custom_view_ticker in tickers:
         custom_view = {
             "type": custom_view_type.lower(),
             "ticker": custom_view_ticker,
             "view": float(custom_view_return_pct) / 100.0,
             "confidence": float(custom_view_confidence_pct) / 100.0,
-            "label": f"User Manager Conviction: {custom_view_ticker} ({custom_view_return_pct:+.1f}%)"
+            "label": f"User Conviction: {custom_view_ticker} ({custom_view_return_pct:+.1f}%)"
         }
         active_manager_views.append(custom_view)
 
-    # Build P, q, Omega matrix for manager views (Cell 36)
     manager_P, manager_q, manager_confidence, manager_labels = build_manager_view_matrix(
         active_manager_views, tickers
     )
     combined_labels = list(tickers) + manager_labels
 
-    # Run Black-Litterman posterior estimation (Cell 18)
     mu_bl, sigma_bl, P, Omega = black_litterman(
         pi_excess, cov_matrix, tau, q_quant.values, conf_quant.values,
         extra_P=manager_P, extra_q=manager_q, extra_confidence=manager_confidence,
         view_labels=combined_labels
     )
 
-    # Constrained SLSQP Optimization (Cell 20)
     bl_weights, opt_status = optimise_portfolio(
         mu_bl, sigma_bl, w_market, previous_w=w_market, risk_aversion=delta
     )
 
-    # Risk contribution and volatility diagnostics (Cell 22)
     rc = risk_contribution(bl_weights, sigma_bl)
     ann_vol = portfolio_vol(bl_weights.values, sigma_bl.values)
     expected_excess = float(bl_weights @ mu_bl)
     expected_total = expected_excess + RF_FALLBACK
     sharpe = expected_excess / max(ann_vol, RIDGE)
 
-    # Whole-share position sizing (Cell 43 of notebook)
     latest_prices = sub.set_index("name")["close"].reindex(tickers).fillna(1.0)
     dollar_allocation = bl_weights * capital_ngn
     raw_shares = dollar_allocation.abs() / latest_prices.replace(0, np.nan)
@@ -726,7 +886,6 @@ def run_full_black_litterman(
     total_invested = float(actual_allocation.sum())
     total_cash_remaining = float(capital_ngn - total_invested)
 
-    # Position sizing table
     position_sizing_df = pd.DataFrame({
         "Ticker": tickers,
         "Optimal Weight (%)": (bl_weights * 100).round(2),
@@ -737,26 +896,22 @@ def run_full_black_litterman(
         "Cash Remainder (₦)": unallocated_cash.round(0).astype(int)
     }).sort_values(by="Optimal Weight (%)", ascending=False).reset_index(drop=True)
 
-    # Manager Views Applied Table
     if active_manager_views:
-        views_display = []
-        for v in active_manager_views:
-            views_display.append({
-                "View Label / Thesis": v.get("label", ""),
-                "Type": v.get("type", "absolute").upper(),
-                "Target / Legs": v.get("ticker", f"{'+'.join(v.get('long',[]))} vs {'+'.join(v.get('short',[]))}"),
-                "Conviction Excess Return (%)": f"{v.get('view', 0.0) * 100:+.1f}%",
-                "Manager Confidence (%)": f"{v.get('confidence', 0.5) * 100:.0f}%"
-            })
+        views_display = [{
+            "View Label / Thesis": v.get("label", ""),
+            "Type": v.get("type", "absolute").upper(),
+            "Target / Legs": v.get("ticker", f"{'+'.join(v.get('long',[]))} vs {'+'.join(v.get('short',[]))}"),
+            "Excess Return Conviction (%)": f"{v.get('view', 0.0) * 100:+.1f}%",
+            "Manager Confidence (%)": f"{v.get('confidence', 0.5) * 100:.0f}%"
+        } for v in active_manager_views]
         views_df = pd.DataFrame(views_display)
     else:
         views_df = pd.DataFrame([{
-            "View Label / Thesis": "No active manager views specified — pure quantitative equilibrium model used.",
+            "View Label / Thesis": "No active manager opinions applied — quantitative equilibrium model used.",
             "Type": "QUANTITATIVE", "Target / Legs": "All Universe",
-            "Conviction Excess Return (%)": "0.0%", "Manager Confidence (%)": "50%"
+            "Excess Return Conviction (%)": "0.0%", "Manager Confidence (%)": "50%"
         }])
 
-    # Diagnostics Report Table (Cell 41)
     diagnostics_df = pd.DataFrame({
         "Ticker": tickers,
         "BL Optimal Weight (%)": (bl_weights * 100).round(2),
@@ -767,7 +922,9 @@ def run_full_black_litterman(
         "Risk Contribution (%)": (rc * 100).round(2)
     }).sort_values(by="BL Optimal Weight (%)", ascending=False).reset_index(drop=True)
 
-    # Visualizations
+    is_dark = STATE.get("theme", "Dark Obsidian") == "Dark Obsidian"
+    font_col = "#cbd5e1" if is_dark else "#1e293b"
+
     fig_donut = go.Figure(go.Pie(
         labels=position_sizing_df["Ticker"],
         values=position_sizing_df["Optimal Weight (%)"],
@@ -778,12 +935,11 @@ def run_full_black_litterman(
     fig_donut.update_layout(
         title=f"Optimal Portfolio Sizing • ₦{capital_ngn:,.0f} Total Capital",
         plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-        font_color="#cbd5e1", height=430, margin=dict(l=20, r=20, t=50, b=40),
+        font_color=font_col, height=430, margin=dict(l=20, r=20, t=50, b=40),
         annotations=[dict(text=f"Sharpe<br><b>{sharpe:.2f}</b>", x=0.5, y=0.5,
-                          font_size=18, showarrow=False, font_color="#38bdf8")]
+                          font_size=18, showarrow=False, font_color="#38bdf8" if is_dark else "#0284c7")]
     )
 
-    # Efficient Frontier with Monte Carlo
     rng = np.random.default_rng(42)
     sim_vols, sim_rets, sim_sharpes = [], [], []
     for _ in range(1200):
@@ -798,8 +954,7 @@ def run_full_black_litterman(
     fig_ef = go.Figure()
     fig_ef.add_trace(go.Scatter(
         x=sim_vols, y=sim_rets, mode="markers",
-        marker=dict(color=sim_sharpes, colorscale="Viridis", size=5, opacity=0.7,
-                    colorbar=dict(title="Sharpe")),
+        marker=dict(color=sim_sharpes, colorscale="Viridis", size=5, opacity=0.7, colorbar=dict(title="Sharpe")),
         name="Monte Carlo Portfolios",
         hovertemplate="Vol: %{x:.2f}%<br>Return: %{y:.2f}%<extra></extra>"
     ))
@@ -814,27 +969,27 @@ def run_full_black_litterman(
         title="Black-Litterman Efficient Frontier (1,200 Simulations)",
         xaxis_title="Expected Volatility (%)", yaxis_title="Excess Return (%)",
         plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-        font_color="#cbd5e1", height=430, margin=dict(l=30, r=20, t=50, b=50)
+        font_color=font_col, height=430, margin=dict(l=30, r=20, t=50, b=50)
     )
 
     summary_md = f"""
 ### 💼 Black-Litterman Portfolio Execution Summary
 | Strategic Metric | Value |
 |---|---|
-| **Total Deployable Capital:** | **₦{capital_ngn:,.0f}** |
+| **Deployable Capital Budget:** | **₦{capital_ngn:,.0f}** |
 | **Capital Executed (Whole Shares):** | **₦{total_invested:,.2f}** ({total_invested / capital_ngn * 100:.1f}%) |
-| **Cash Buffer Remaining:** | **₦{total_cash_remaining:,.2f}** |
-| **Expected Annual Total Return:** | **{expected_total * 100:.2f}%** (Risk-free MPR: {RF_FALLBACK:.1%}) |
+| **Cash Buffer Remainder:** | **₦{total_cash_remaining:,.2f}** |
+| **Expected Total Return (p.a.):** | **{expected_total * 100:.2f}%** (Risk-free benchmark: {RF_FALLBACK:.1%}) |
 | **Expected Annual Volatility:** | **{ann_vol * 100:.2f}%** |
 | **Sharpe Ratio (Excess / Vol):** | **{sharpe:.3f}** |
-| **Manager Convictions Applied:** | **{len(active_manager_views)} active views integrated** |
-| **Optimizer Convergence:** | {opt_status} |
+| **Manager Opinions Integrated:** | **{len(active_manager_views)} active views** |
+| **Convergence Status:** | {opt_status} |
     """
 
     return fig_donut, fig_ef, position_sizing_df, views_df, diagnostics_df, summary_md
 
 # ==============================================================================
-# 7. CORRELATION & FORECAST & ML PIPELINE
+# 7. CORRELATION & FORECASTING ENGINES
 # ==============================================================================
 def compute_correlation_matrix(selected_tickers):
     df = STATE["df"]
@@ -861,6 +1016,7 @@ def compute_correlation_matrix(selected_tickers):
     ret_df = pd.DataFrame(series_dict)
     corr_matrix = ret_df.corr().round(2)
 
+    is_dark = STATE.get("theme", "Dark Obsidian") == "Dark Obsidian"
     fig_corr = go.Figure(go.Heatmap(
         z=corr_matrix.values,
         x=corr_matrix.columns,
@@ -874,7 +1030,8 @@ def compute_correlation_matrix(selected_tickers):
     fig_corr.update_layout(
         title="NGX Equities Return Correlation Matrix",
         plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-        font_color="#cbd5e1", height=480, margin=dict(l=40, r=20, t=50, b=60)
+        font_color="#cbd5e1" if is_dark else "#1e293b",
+        height=480, margin=dict(l=40, r=20, t=50, b=60)
     )
 
     info_md = f"""
@@ -917,11 +1074,12 @@ def forecast_stock_price(ticker_name, horizon_days=30):
     upper_band = forecast_central * np.exp(1.645 * uncertainty)
     lower_band = forecast_central * np.exp(-1.645 * uncertainty)
 
+    is_dark = STATE.get("theme", "Dark Obsidian") == "Dark Obsidian"
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=hist_dates, y=hist_prices,
         mode="lines", name="Historical (60D)",
-        line=dict(color="#38bdf8", width=2.5)
+        line=dict(color="#38bdf8" if is_dark else "#0284c7", width=2.5)
     ))
     fig.add_trace(go.Scatter(
         x=future_dates, y=forecast_central,
@@ -947,7 +1105,8 @@ def forecast_stock_price(ticker_name, horizon_days=30):
         title=f"📈 {ticker_name} — Price Trajectory & {horizon_days}-Day Projection",
         xaxis_title="Date", yaxis_title="Price (₦)",
         plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-        font_color="#cbd5e1", height=440, margin=dict(l=40, r=20, t=50, b=50)
+        font_color="#cbd5e1" if is_dark else "#1e293b",
+        height=440, margin=dict(l=40, r=20, t=50, b=50)
     )
 
     report_md = f"""
@@ -1023,12 +1182,14 @@ def run_ml_clustering(n_clusters=4, search_stock=""):
                 name="🔍 Target Peer"
             ))
 
+    is_dark = STATE.get("theme", "Dark Obsidian") == "Dark Obsidian"
     fig_pca.update_layout(
         title=f"🤖 Unsupervised K-Means Cluster Map (PCA Variance: {var_exp[0]}% + {var_exp[1]}%)",
         xaxis_title=f"Principal Component 1 ({var_exp[0]}%)",
         yaxis_title=f"Principal Component 2 ({var_exp[1]}%)",
         plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-        font_color="#cbd5e1", height=460, margin=dict(l=40, r=20, t=50, b=60)
+        font_color="#cbd5e1" if is_dark else "#1e293b",
+        height=460, margin=dict(l=40, r=20, t=50, b=60)
     )
 
     sizes = sub["Cluster"].value_counts().reset_index()
@@ -1041,7 +1202,8 @@ def run_ml_clustering(n_clusters=4, search_stock=""):
     fig_bar.update_layout(
         title="Equities per Cluster",
         plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-        font_color="#cbd5e1", height=300, margin=dict(l=40, r=20, t=40, b=40)
+        font_color="#cbd5e1" if is_dark else "#1e293b",
+        height=300, margin=dict(l=40, r=20, t=40, b=40)
     )
 
     summary_df = sub[["name", "Cluster", "Perf.5Y", "dividends_yield_current", "price_book_ratio"]].copy()
@@ -1103,6 +1265,7 @@ def run_factor_scoring(w_momentum, w_income, w_value, w_quality, top_n=15):
         for r in top["Rating"]
     ]
 
+    is_dark = STATE.get("theme", "Dark Obsidian") == "Dark Obsidian"
     fig = go.Figure(go.Bar(
         x=top["name"], y=top["Score"].round(1),
         text=top["Rating"], textposition="outside",
@@ -1113,7 +1276,8 @@ def run_factor_scoring(w_momentum, w_income, w_value, w_quality, top_n=15):
         xaxis_tickangle=-45, yaxis_title="Score (0–100)",
         yaxis_range=[0, 115],
         plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-        font_color="#cbd5e1", height=420, margin=dict(l=40, r=20, t=50, b=80)
+        font_color="#cbd5e1" if is_dark else "#1e293b",
+        height=420, margin=dict(l=40, r=20, t=50, b=80)
     )
 
     cols = ["name", "Score", "Rating", "Perf.5Y", "dividends_yield_current", "price_book_ratio", "basic_eps_net_income"]
@@ -1129,10 +1293,10 @@ def run_factor_scoring(w_momentum, w_income, w_value, w_quality, top_n=15):
     return fig, res_df, "✅ Multi-factor ranking generated."
 
 # ==============================================================================
-# 8. MODERN FINTECH WEBSITE STYLING (CSS)
+# 8. MASTER GRADIO USER INTERFACE
 # ==============================================================================
-MODERN_WEBSITE_CSS = """
-/* === Modern Fintech Website Base Theme === */
+BASE_CSS = """
+/* === Modern Fintech Website Base Styling === */
 :root {
     --bg-main: #080c14;
     --card-bg: rgba(15, 23, 42, 0.75);
@@ -1145,23 +1309,17 @@ MODERN_WEBSITE_CSS = """
 }
 
 body, .gradio-container {
-    background: radial-gradient(circle at top right, #0f172a 0%, #080c14 60%, #030712 100%) !important;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Inter", sans-serif !important;
-    color: #f1f5f9 !important;
+    transition: background 0.3s ease, color 0.3s ease;
 }
 
-/* Glassmorphism Navigation Bar */
 .brand-navbar {
-    background: linear-gradient(135deg, rgba(15, 23, 42, 0.85) 0%, rgba(30, 41, 59, 0.85) 100%) !important;
-    backdrop-filter: blur(16px) !important;
-    border: 1px solid rgba(255, 255, 255, 0.1) !important;
     border-radius: 16px !important;
     padding: 24px 32px !important;
-    margin-bottom: 24px !important;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5) !important;
+    margin-bottom: 20px !important;
+    transition: all 0.3s ease !important;
 }
 
-/* Modern Glowing Badges */
 .badge-pill {
     display: inline-block;
     padding: 4px 12px;
@@ -1176,24 +1334,12 @@ body, .gradio-container {
     margin-bottom: 8px;
 }
 
-/* Modern Glass Content Cards */
-.glass-panel {
-    background: rgba(15, 23, 42, 0.7) !important;
-    backdrop-filter: blur(12px) !important;
-    border: 1px solid rgba(255, 255, 255, 0.08) !important;
-    border-radius: 14px !important;
-    padding: 20px !important;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35) !important;
-}
-
-/* Futuristic Action Buttons */
 .btn-cyan {
     background: linear-gradient(135deg, #06b6d4 0%, #0284c7 100%) !important;
     color: #ffffff !important;
     font-weight: 700 !important;
     border: none !important;
     border-radius: 10px !important;
-    padding: 12px 24px !important;
     box-shadow: 0 4px 15px rgba(6, 182, 212, 0.4) !important;
     transition: all 0.2s ease-in-out !important;
 }
@@ -1229,73 +1375,60 @@ body, .gradio-container {
     box-shadow: 0 4px 15px rgba(245, 158, 11, 0.35) !important;
 }
 
-/* Navigation Tabs Styling */
-.tabs {
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1) !important;
-    margin-bottom: 20px !important;
-}
-.tab-nav button {
-    font-size: 1rem !important;
-    font-weight: 600 !important;
-    color: #94a3b8 !important;
-    padding: 12px 20px !important;
-    border-radius: 8px 8px 0 0 !important;
-    transition: all 0.2s ease !important;
-}
-.tab-nav button.selected {
-    color: #38bdf8 !important;
-    border-bottom: 3px solid #38bdf8 !important;
-    background: rgba(14, 165, 233, 0.08) !important;
-}
-
-/* Styled KPI Stat Cards */
-.kpi-metric-box {
-    background: rgba(30, 41, 59, 0.6) !important;
-    border: 1px solid rgba(255, 255, 255, 0.08) !important;
-    border-radius: 12px !important;
-    padding: 16px !important;
+.theme-toggle-box {
+    padding: 6px 14px;
+    border-radius: 12px;
 }
 """
 
-# ==============================================================================
-# 9. GRADIO MODERN WEBSITE INTERFACE
-# ==============================================================================
 with gr.Blocks(title="AKH Capital Analytics Platform") as demo:
 
-    # --- TOP BRAND HEADER (WEBSITE STYLE) ---
+    # Dynamic Theme CSS Injector
+    theme_injector = gr.HTML(value=get_theme_css("🌙 Dark Obsidian"))
+
+    # --- TOP BRAND NAVBAR ---
     with gr.Row(elem_classes=["brand-navbar"]):
-        with gr.Column(scale=8):
+        with gr.Column(scale=7):
             gr.HTML("""
                 <div class="badge-pill">⚡ Institutional Quant Suite</div>
-                <h1 style="margin: 0; font-size: 2.1rem; font-weight: 800; letter-spacing: -0.02em; background: linear-gradient(90deg, #ffffff 0%, #38bdf8 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
+                <h1 style="margin: 0; font-size: 2.15rem; font-weight: 800; letter-spacing: -0.02em;">
                     AKH Capital Analytics Platform
                 </h1>
-                <p style="margin: 6px 0 0 0; color: #94a3b8; font-size: 1.02rem;">
-                    Institutional Nigerian Exchange (NGX) Market Intelligence, Black-Litterman Portfolio Optimization & Machine Learning Suite
+                <p style="margin: 6px 0 0 0; opacity: 0.85; font-size: 1.02rem;">
+                    Institutional Nigerian Exchange (NGX) Intelligence, Black-Litterman Portfolio Optimization & Ensemble Machine Learning
                 </p>
             """)
             status_banner = gr.Markdown("⏳ Connecting to real-time market data feed...", elem_id="status-box")
-        with gr.Column(scale=4):
-            refresh_market_btn = gr.Button("🔄 Refresh Market Data", elem_classes=["btn-cyan"], size="lg")
+        with gr.Column(scale=5):
+            with gr.Row():
+                theme_switcher = gr.Radio(
+                    choices=["🌙 Dark Obsidian", "☀️ Light Pearl"],
+                    value="🌙 Dark Obsidian",
+                    label="Display Palette",
+                    interactive=True,
+                    elem_classes=["theme-toggle-box"]
+                )
+            with gr.Row():
+                refresh_market_btn = gr.Button("🔄 Refresh Market Data", elem_classes=["btn-cyan"], size="lg")
             with gr.Row():
                 auto_sync_toggle = gr.Checkbox(label="Auto-sync Google Sheet", value=True)
                 sync_now_btn = gr.Button("📤 Push to Sheet", elem_classes=["btn-emerald"], size="sm")
 
-    # --- HIGH-IMPACT KPI TILES ---
+    # --- KEY PERFORMANCE METRIC TILES ---
     with gr.Row():
         kpi_count = gr.Textbox(label="📊 Tracked NGX Equities", interactive=False)
-        kpi_5y = gr.Textbox(label="🚀 Best 5Y Performer", interactive=False)
-        kpi_div = gr.Textbox(label="💰 Top Dividend Yield", interactive=False)
+        kpi_5y = gr.Textbox(label="🚀 Top 5Y Return", interactive=False)
+        kpi_div = gr.Textbox(label="💰 Highest Dividend Yield", interactive=False)
         kpi_mcap = gr.Textbox(label="🏛️ Market Cap Leader", interactive=False)
 
-    # --- MAIN PLATFORM TABS ---
+    # --- MAIN APPLICATION NAVIGATION ---
     with gr.Tabs():
 
         # ======================================================================
         # TAB 1: MARKET RESEARCH & SCREENER
         # ======================================================================
         with gr.Tab("🏛️ Market Research & Screener"):
-            gr.Markdown("### 🔍 Live NGX Stock Screener & Technical Breakout Signals")
+            gr.Markdown("### 🔍 Real-Time NGX Stock Screener & Strategy Filters")
             with gr.Row():
                 search_box = gr.Textbox(placeholder="🔍 Search ticker or company (e.g. SEPLAT, MTNN, DANGCEM)...", label="Search Equities", scale=4)
                 sort_dropdown = gr.Dropdown(
@@ -1346,8 +1479,8 @@ Direct implementation of `NGX_Black_Litterman_Real_World_v4.ipynb` integrating *
                 with gr.Column(scale=2):
                     risk_tolerance_slider = gr.Slider(1, 10, 5, step=1, label="3. Risk Tolerance (1=Low, 10=Aggressive)")
 
-            # --- MANAGER'S OPINIONS SECTION (FROM NOTEBOOK) ---
-            with gr.Accordion("🧠 Portfolio Manager Convictions & Views (Active Opinions)", open=True):
+            # --- MANAGER'S OPINIONS ACCORDION ---
+            with gr.Accordion("🧠 Portfolio Manager Convictions & Opinions (Active Views)", open=True):
                 gr.Markdown(
                     """
 Configure your **Manager Opinions** to tilt the equilibrium market portfolio towards your active conviction.
@@ -1361,7 +1494,7 @@ You can include the pre-configured notebook views and/or inject your own custom 
                     )
                 with gr.Row():
                     with gr.Column(scale=3):
-                        custom_view_ticker_dd = gr.Dropdown(choices=[], label="Target Stock for Custom View", info="Select stock from universe")
+                        custom_view_ticker_dd = gr.Dropdown(choices=[], label="Target Stock for Custom View")
                     with gr.Column(scale=2):
                         custom_view_type_dd = gr.Dropdown(choices=["Absolute", "Relative"], value="Absolute", label="View Type")
                     with gr.Column(scale=3):
@@ -1431,17 +1564,37 @@ From `prophet_forecast1.ipynb`: generates probabilistic forward forecast traject
             forecast_summary_box = gr.Markdown()
 
         # ======================================================================
-        # TAB 5: MACHINE LEARNING INTELLIGENCE
+        # TAB 5: MACHINE LEARNING INTELLIGENCE (FROM NOTEBOOK & MODEL FOLDER)
         # ======================================================================
         with gr.Tab("🤖 Machine Learning Intelligence"):
             gr.Markdown(
                 """
-### 🤖 K-Means Clustering & Multi-Factor Quantitative Model
-Unsupervised machine learning segments the NGX universe into behavioral peer groups. Multi-factor scoring ranks equities across Momentum, Income, Value, and Quality.
+### 🤖 Advanced Machine Learning Intelligence Suite
+Includes your **Pre-Trained 4-Model Ensemble Classifier** from `Notebooks/Machine learning/ngx model_eval_ensemble_updated (2).ipynb`,
+alongside unsupervised K-Means behavioral clustering and multi-factor quantitative ranking.
                 """
             )
             with gr.Tabs():
-                with gr.Tab("Cluster Map (K-Means & PCA)"):
+
+                # SUB-TAB 1: ENSEMBLE MODEL EVALUATION (FROM NOTEBOOK)
+                with gr.Tab("🎯 4-Model Ensemble Breakout Classifier"):
+                    gr.Markdown(
+                        """
+#### 🎯 Pre-Trained Multi-Model Ensemble (RandomForest + XGBoost + LightGBM + LogisticRegression)
+Loaded directly from `Model mangement/Classification model/5 days prediction model/NGX v1/`. Evaluates candlestick breakout patterns, money flows, volume changes, and VWAP metrics.
+                        """
+                    )
+                    with gr.Row():
+                        ml_decision_thresh_slider = gr.Slider(0.20, 0.80, 0.50, step=0.05, label="Decision Threshold (Default 0.50)")
+                        ml_top_n_slider = gr.Slider(5, 30, 15, step=5, label="Top Predicted Signals to Show")
+                        run_ensemble_btn = gr.Button("🚀 Run Ensemble Predictions", elem_classes=["btn-emerald"], size="lg")
+
+                    ml_ensemble_chart = gr.Plot()
+                    ml_ensemble_summary = gr.Markdown()
+                    ml_ensemble_table = gr.Dataframe(interactive=False)
+
+                # SUB-TAB 2: K-MEANS & PCA CLUSTERING
+                with gr.Tab("🧬 Behavioral Cluster Map (K-Means & PCA)"):
                     with gr.Row():
                         clusters_slider = gr.Slider(2, 6, 4, step=1, label="Number of Clusters (k)")
                         stock_search_ml = gr.Textbox(placeholder="e.g. DANGCEM, MTNN, SEPLAT...", label="Find Peer Stocks")
@@ -1452,7 +1605,8 @@ Unsupervised machine learning segments the NGX universe into behavioral peer gro
                     ml_summary_box = gr.Markdown()
                     cluster_results_table = gr.Dataframe(interactive=False)
 
-                with gr.Tab("Multi-Factor Quantitative Model"):
+                # SUB-TAB 3: MULTI-FACTOR QUANTITATIVE MODEL
+                with gr.Tab("🏆 Multi-Factor Quantitative Model"):
                     with gr.Row():
                         w_mom = gr.Slider(0, 10, 5, step=1, label="📈 Momentum Weight (5Y Gain)")
                         w_inc = gr.Slider(0, 10, 4, step=1, label="💰 Income Weight (Dividend Yield)")
@@ -1465,8 +1619,18 @@ Unsupervised machine learning segments the NGX universe into behavioral peer gro
                     factor_table = gr.Dataframe(interactive=False)
 
     # ==========================================================================
-    # 10. EVENT WIRING & DATA REFRESH HANDLERS
+    # 9. MASTER EVENT HANDLERS
     # ==========================================================================
+    def toggle_theme_handler(chosen_theme):
+        STATE["theme"] = chosen_theme
+        return get_theme_css(chosen_theme)
+
+    theme_switcher.change(
+        fn=toggle_theme_handler,
+        inputs=[theme_switcher],
+        outputs=[theme_injector]
+    )
+
     def master_refresh(search_text, sort_col, filter_strat, min_div, auto_sync):
         df, status = fetch_ngx_market()
         if auto_sync and df is not None and not df.empty:
@@ -1496,7 +1660,6 @@ Unsupervised machine learning segments the NGX universe into behavioral peer gro
         portfolio_stocks_picker, custom_view_ticker_dd, corr_stocks_picker, forecast_ticker_input
     ]
 
-    # Page load & manual refresh
     demo.load(
         fn=master_refresh,
         inputs=[search_box, sort_dropdown, signal_filter, min_div_slider, auto_sync_toggle],
@@ -1508,14 +1671,12 @@ Unsupervised machine learning segments the NGX universe into behavioral peer gro
         outputs=refresh_outputs
     )
 
-    # GSheet Sync Now
     sync_now_btn.click(
         fn=lambda: push_to_gsheet(STATE["df"])[1],
         inputs=[],
         outputs=[status_banner]
     )
 
-    # Screener dynamic filtering
     for comp in [search_box, sort_dropdown, signal_filter, min_div_slider]:
         comp.change(
             fn=lambda s, so, st, y: filter_screener_table(s, so, y, st, STATE["df"]),
@@ -1523,7 +1684,7 @@ Unsupervised machine learning segments the NGX universe into behavioral peer gro
             outputs=[screener_table]
         )
 
-    # Black-Litterman Portfolio Optimizer with Manager Opinions
+    # Black-Litterman Portfolio Optimizer
     run_optimizer_btn.click(
         fn=run_full_black_litterman,
         inputs=[
@@ -1551,6 +1712,13 @@ Unsupervised machine learning segments the NGX universe into behavioral peer gro
         outputs=[forecast_plot, forecast_summary_box]
     )
 
+    # Ensemble ML Evaluation
+    run_ensemble_btn.click(
+        fn=run_ml_ensemble_predictions,
+        inputs=[ml_decision_thresh_slider, ml_top_n_slider],
+        outputs=[ml_ensemble_chart, ml_ensemble_table, ml_ensemble_summary]
+    )
+
     # ML K-Means
     run_ml_btn.click(
         fn=run_ml_clustering,
@@ -1566,7 +1734,7 @@ Unsupervised machine learning segments the NGX universe into behavioral peer gro
     )
 
 # ==============================================================================
-# 11. APPLICATION LAUNCH
+# 10. LAUNCH
 # ==============================================================================
 if __name__ == "__main__":
     share_flag = os.environ.get("GRADIO_SHARE", "false").lower() in ["true", "1"] or "--share" in sys.argv
@@ -1578,5 +1746,5 @@ if __name__ == "__main__":
         server_port=server_port,
         share=share_flag,
         theme=gr.themes.Soft(),
-        css=MODERN_WEBSITE_CSS
+        css=BASE_CSS
     )
