@@ -1,8 +1,13 @@
 gradio>=6.0.0
 pandas>=2.0.0
+numpy>=1.24.0
 tradingview_screener>=3.2.0
 openpyxl>=3.1.0
 pytz
 pygsheets>=2.0.6
 google-api-python-client
 google-auth
+scipy>=1.11.0
+scikit-learn>=1.3.0
+plotly>=5.18.0
+statsmodels>=0.14.0

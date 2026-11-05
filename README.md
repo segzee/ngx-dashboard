@@ -1,8 +1,8 @@
 ---
-title: NGX Live Stock Screener & Dashboard
-emoji: 📈
+title: AKH Capital Analytics Platform
+emoji: 🏦
 colorFrom: green
-colorTo: emerald
+colorTo: green
 sdk: gradio
 sdk_version: 6.31.0
 app_file: app.py
@@ -10,86 +10,71 @@ pinned: false
 license: mit
 ---
 
-# 🇳🇬 Nigerian Exchange (NGX) Live Market Dashboard
+# 🏦 AKH Capital Analytics Platform
+### Institutional Nigerian Exchange (NGX) Market Intelligence & Quant Analytics Suite
 
-A real-time stock screener and financial analytics dashboard for equities on the Nigerian Exchange (NGX). Built with **Python**, **Gradio**, and **TradingView Screener API**, with automated synchronization to **Google Sheets**.
-
----
-
-## ✨ Features
-
-- **🔄 One-Click Live Market Refresh**: Re-query live NGX stock data directly from TradingView screener at the touch of a button.
-- **📊 Google Sheets Synchronization**: Auto-syncs latest market prices, metrics, and valuations to Google Sheets ([Stocks Primed for Breakout](https://docs.google.com/spreadsheets/d/1jkbrrHnR48JztVz0SrqZELKjOenVm44wsiIchLW0K9g/edit#gid=1868316212)).
-- **📋 Interactive Screener Table**:
-  - Live Prices, Dividend Yields, 5-Year Performance, Price-to-Book (P/B), Enterprise Value, Annual Revenue, EPS, EBITDA, EV/EBITDA, and 30-day average volume.
-  - Real-time search filter by ticker or company name.
-  - Sorting options and minimum dividend yield filter.
-- **📈 Valuation & Performance Visualizations**:
-  - Top 10 by 5-Year Return (%)
-  - Top 10 Dividend Yields (%)
-  - Top 10 by Enterprise Value (₦ Trillions)
-  - Configurable X-axis company name orientation (Slanted 45° or Vertical 90° for legibility).
-- **💾 Offline Excel Export**: 1-click export of the refreshed dataset to `.xlsx` format.
+A comprehensive equity intelligence and quantitative finance platform for the **Nigerian Exchange (NGX)**. Built with **Python**, **Gradio**, **TradingView Screener API**, **Scikit-Learn**, **SciPy**, and **Plotly**, featuring automated live synchronization with **Google Sheets**.
 
 ---
 
-## 🚀 Quick Start (Local)
+## 🌟 Platform Sections & Core Capabilities
 
-### 1. Clone the repository
+### 1. 🏛️ Market Research & Breakout Screener
+- **Real-Time NGX Universe Screener**: Live market pricing, 5Y & 1Y returns, dividend yields, P/B, P/E, Market Cap, Enterprise Value, RSI, and 50-day EMA.
+- **Breakout Pattern & Value Filters**: Instant identification of technical breakouts (`EMA50` divergence), oversold/momentum RSI setups, and value bargains (P/B < 1.5).
+- **Interactive Visualizations**: Top capital gainers, dividend yield leaders, and market-cap giants.
+- **Two-Way Google Sheets Sync**: One-click and automated synchronization to [Stocks Primed for Breakout](https://docs.google.com/spreadsheets/d/1jkbrrHnR48JztVz0SrqZELKjOenVm44wsiIchLW0K9g/edit#gid=1868316212).
+- **Data Export**: Instant Microsoft Excel (`.xlsx`) offline export.
+
+### 2. 💼 Black-Litterman Portfolio Optimization
+- **Institutional Asset Allocation Engine**: Derived from the Black-Litterman model with implied equilibrium returns ($\Pi = \delta \Sigma w_{mkt}$) and Ledoit-Wolf shrinkage covariance.
+- **Constrained Quadratic Programming**: Solves for maximum Sharpe ratio subject to single-asset weight caps and active risk limits.
+- **Capital Budget Sizing**: Custom capital allocation in Naira (₦) with exact cash weights per stock.
+- **Monte Carlo Efficient Frontier**: 1,200+ simulated portfolios visualizing risk-return tradeoffs and the Capital Market Line.
+
+### 3. 📊 Equity Research & Correlation Explorer
+- **Interactive Return Correlation Heatmap**: Cross-asset correlation analysis to discover diversification opportunities.
+- **Pairwise Co-Movement Matrix**: Identifies low and negatively correlated equities to minimize portfolio drawdown.
+
+### 4. 📈 Price Forecasting Engine
+- **Multi-Horizon Trajectory Model**: Generates forward-looking price targets for any selected NGX equity over 10 to 90 trading days.
+- **Confidence Uncertainty Intervals**: 90% confidence upper and lower bounds based on historical volatility expansion.
+
+### 5. 🤖 Machine Learning Intelligence
+- **Unsupervised K-Means Clustering**: Segments the entire NGX universe into data-driven clusters (e.g. Dividend Anchors, Growth Momentum, Deep Value, High-Beta Leaders).
+- **2D PCA Visualization**: Principal Component Analysis projection with interactive search and peer stock locator.
+- **Multi-Factor Quantitative Ranking Model**: Weighted scoring across Momentum (5Y Gain), Income (Dividend Yield), Value (P/B), and Quality (EPS) with actionable **Buy / Watch / Avoid** ratings.
+
+---
+
+## 🚀 Local Deployment
+
+### 1. Clone & Navigate
 ```bash
-git clone <YOUR_GITHUB_REPO_URL>
-cd "AKH capital project"
+git clone https://github.com/segzee/ngx-dashboard.git
+cd ngx-dashboard
 ```
 
-### 2. Install dependencies
+### 2. Install Dependencies
 ```bash
 pip install -r requirements.txt
 ```
 
-### 3. Run the dashboard
+### 3. Launch Platform
 ```bash
 python app.py
 ```
-Or double-click `run_dashboard.bat` on Windows.
-
-Open your browser at:
-`http://127.0.0.1:7860`
+Open your browser at `http://127.0.0.1:7860`.
 
 ---
 
-## 🌐 Public Accessible Website Deployment
+## 🌐 Cloud Deployment (Render.com)
 
-### Option A: Hugging Face Spaces (Free, Permanent, 1-Click)
-This repository is configured with Hugging Face Space metadata.
-1. Create a free account at [huggingface.co](https://huggingface.co).
-2. Go to **New Space** -> Select **Gradio** SDK.
-3. Link your GitHub repository or push this repository directly.
-4. *(Optional for Google Sheets Sync)*: Add your Google Service Account JSON to **Settings > Secrets** as `GSHEET_SERVICE_ACCOUNT_JSON`.
-5. Your dashboard will be live at `https://huggingface.co/spaces/<your-username>/<your-space-name>`.
-
-### Option B: Instant Public Sharing Link
-Run:
-```bash
-python app.py --share
-```
-This generates a temporary public `.gradio.live` URL accessible from anywhere in the world.
-
-### Option C: Render / Railway / Koyeb
-Deploy as a Web Service:
 - **Build Command**: `pip install -r requirements.txt`
 - **Start Command**: `python app.py`
-
----
-
-## 🔑 Google Sheets Configuration
-
-The app automatically attempts to authorize Google Sheets via:
-1. Environment variable `GSHEET_SERVICE_ACCOUNT_JSON` (contains raw JSON string).
-2. Environment variable `GSHEET_SERVICE_ACCOUNT_FILE` (path to JSON key file).
-3. Local file `google_creds.json` in the project root.
-4. Default local developer desktop credentials path.
-
-If credentials are not supplied, the screener and analytics remain fully operational.
+- **Environment Variables**:
+  - `PORT`: `10000`
+  - `GSHEET_SERVICE_ACCOUNT_JSON`: *(Your Google Service Account credentials JSON string)*
 
 ---
 
